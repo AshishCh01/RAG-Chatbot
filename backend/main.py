@@ -1,15 +1,13 @@
-from fastapi import FastAPI, HTTPException
+import shutil
+from pathlib import Path
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI, File, UploadFile, HTTPException
 from pydantic import BaseModel
 from generation import answer_question
+from ingestion import ingest_single_file, DOCUMENTS_DIR
 
-app = FastAPI(
-    title="RAG Chatbot API",
-    description="Backend API serving Google Gemini 2.5 Flash & Pinecone RAG operations",
-    version="1.0.0"
-)
+app = FastAPI(title="RAG Chatbot API")
 
-# Enable CORS for local frontend communication
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -18,36 +16,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+ALLOWED_EXTENSIONS = {".pdf", ".docx", ".csv", ".txt", ".md"}
+
 
 class QueryRequest(BaseModel):
     question: str
 
 
-class QueryResponse(BaseModel):
-    answer: str
-
-
 @app.get("/health")
 def health_check():
-    """Health check endpoint to verify backend status."""
     return {"status": "healthy"}
-
-
-# @app.post("/query", response_model=QueryResponse)
-# def query_rag(request: QueryRequest):
-#     """Processes user question through the RAG pipeline."""
-#     user_query = request.question.strip()
-#     if not user_query:
-#         raise HTTPException(status_code=400, detail="Question string cannot be empty.")
-
-#     try:
-#         answer = answer_question(user_query)
-#         return QueryResponse(answer=answer)
-#     except Exception as e:
-#         raise HTTPException(
-#             status_code=500,
-#             detail=f"An error occurred while generating the response: {str(e)}"
-#         )
 
 
 @app.post("/query")
@@ -56,8 +34,51 @@ def query_documents(request: QueryRequest):
         raise HTTPException(status_code=400, detail="Question cannot be empty.")
 
     try:
-        # Returns {"answer": str, "sources": list}
         result = answer_question(request.question)
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/upload")
+def upload_document(file: UploadFile = File(...)):
+    """Receives an uploaded document, saves it to disk, and triggers vector ingestion."""
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No file provided.")
+
+    file_path = Path(file.filename)
+    ext = file_path.suffix.lower()
+
+    # 1. Validate file format
+    if ext not in ALLOWED_EXTENSIONS:
+        allowed_str = ", ".join(sorted(ALLOWED_EXTENSIONS))
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file format '{ext}'. Supported formats: {allowed_str}"
+        )
+
+    # 2. Ensure destination directory exists
+    dest_dir = Path(DOCUMENTS_DIR)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+
+    save_path = dest_dir / file.filename
+
+    # 3. Save incoming file to local documents directory
+    try:
+        with open(save_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save file: {str(e)}")
+
+    # 4. Trigger vector embedding and ingestion for the uploaded file
+    try:
+        chunks_count = ingest_single_file(str(save_path))
+        return {
+            "message": "File uploaded and ingested successfully!",
+            "filename": file.filename,
+            "chunks_created": chunks_count
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to process file: {str(e)}")
+
+

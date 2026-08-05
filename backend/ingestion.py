@@ -1,8 +1,14 @@
 import os
-from pinecone import Pinecone, ServerlessSpec
+from pathlib import Path
+from pydantic import SecretStr
+from langchain_community.document_loaders import (
+    PyPDFLoader,
+    Docx2txtLoader,
+    CSVLoader,
+    TextLoader,
+)
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_pinecone import PineconeEmbeddings, PineconeVectorStore
-
 from config import (
     PINECONE_API_KEY,
     PINECONE_INDEX_NAME,
@@ -10,72 +16,91 @@ from config import (
     CHUNK_SIZE,
     CHUNK_OVERLAP,
 )
-from document_loader import load_all_documents
+
+DOCUMENTS_DIR = "./documents"
 
 
-def ingest_documents():
-    """Loads documents, splits into chunks, generates embeddings, and uploads to Pinecone."""
-    print("--- STEP 1: Loading Documents ---")
-    documents = load_all_documents()
+def load_single_document(file_path: str):
+    """Loads a single document based on its file extension (.pdf, .docx, .csv, .txt, .md)."""
+    path = Path(file_path)
+    if not path.exists() or not path.is_file():
+        raise FileNotFoundError(f"File not found: {file_path}")
 
-    if not documents:
-        print("[CANCELLED] No documents found to process. Ingestion stopped.")
-        return
+    ext = path.suffix.lower()
+    file_str = str(path)
 
-    print("\n--- STEP 2: Splitting Documents into Chunks ---")
+    if ext == ".pdf":
+        loader = PyPDFLoader(file_str)
+    elif ext == ".docx":
+        loader = Docx2txtLoader(file_str)
+    elif ext == ".csv":
+        loader = CSVLoader(file_str, encoding="utf-8")
+    elif ext in [".txt", ".md"]:
+        loader = TextLoader(file_str, encoding="utf-8")
+    else:
+        raise ValueError(f"Unsupported file format: {ext}")
+
+    return loader.load()
+
+
+def ingest_single_file(file_path: str) -> int:
+    """Loads, chunks, embeds, and uploads a single file to Pinecone."""
+    if not PINECONE_API_KEY:
+        raise ValueError("PINECONE_API_KEY is not configured.")
+
+    print(f"\n[INGESTING] Processing single file: {file_path}")
+    docs = load_single_document(file_path)
+
+    # Chunk the document
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=CHUNK_SIZE,
-        chunk_overlap=CHUNK_OVERLAP,
-        add_start_index=True,
+        chunk_overlap=CHUNK_OVERLAP
     )
-    chunks = text_splitter.split_documents(documents)
-    print(f"[SUCCESS] Split {len(documents)} document record(s) into {len(chunks)} chunk(s).")
+    chunks = text_splitter.split_documents(docs)
+    print(f"[INGESTING] Created {len(chunks)} chunk(s) for {file_path}")
 
-    print("\n--- STEP 3: Initializing Pinecone & Index Check ---")
-    pc = Pinecone(api_key=PINECONE_API_KEY)
-
-    # Fetch index list and create index if missing
-    existing_indexes = [idx.name for idx in pc.list_indexes()]
-    if PINECONE_INDEX_NAME not in existing_indexes:
-        print(f"Index '{PINECONE_INDEX_NAME}' not found. Creating index...")
-        try:
-            # Create index configured for integrated model inference
-            pc.create_index_for_model(
-                name=PINECONE_INDEX_NAME,
-                cloud="aws",
-                region="us-east-1",
-                embed={
-                    "model": EMBEDDING_MODEL,
-                    "field_map": {"text": "text"}
-                }
-            )
-            print(f"[SUCCESS] Created integrated index '{PINECONE_INDEX_NAME}'.")
-        except Exception:
-            # Fallback to standard serverless index (llama-text-embed-v2 uses 1024 dimensions by default)
-            pc.create_index(
-                name=PINECONE_INDEX_NAME,
-                dimension=1024,
-                metric="cosine",
-                spec=ServerlessSpec(cloud="aws", region="us-east-1")
-            )
-            print(f"[SUCCESS] Created serverless index '{PINECONE_INDEX_NAME}' with 1024 dimensions.")
-    else:
-        print(f"[INFO] Index '{PINECONE_INDEX_NAME}' already exists.")
-
-    print("\n--- STEP 4: Embedding & Upserting to Pinecone ---")
+    # Initialize Pinecone embeddings with SecretStr wrapping
     embeddings = PineconeEmbeddings(
         model=EMBEDDING_MODEL,
-        pinecone_api_key=PINECONE_API_KEY
+        pinecone_api_key=SecretStr(PINECONE_API_KEY)
     )
 
+    # Upload chunks to Pinecone index
     PineconeVectorStore.from_documents(
         documents=chunks,
         embedding=embeddings,
         index_name=PINECONE_INDEX_NAME
     )
+    print(f"[SUCCESS] Uploaded {len(chunks)} chunk(s) from {file_path} to Pinecone!")
+    return len(chunks)
 
-    print(f"\n[COMPLETE] Successfully ingested {len(chunks)} chunks into Pinecone index '{PINECONE_INDEX_NAME}'.")
+
+def run_ingestion():
+    """Batch loads and ingests all supported files inside the documents directory."""
+    dir_path = Path(DOCUMENTS_DIR)
+    if not dir_path.exists():
+        print(f"[ERROR] Directory '{DOCUMENTS_DIR}' does not exist.")
+        return
+
+    supported_extensions = {".pdf", ".docx", ".csv", ".txt", ".md"}
+    files = [f for f in dir_path.iterdir() if f.is_file() and f.suffix.lower() in supported_extensions]
+
+    if not files:
+        print("[INFO] No supported document files found.")
+        return
+
+    print(f"Found {len(files)} document file(s) for batch ingestion.")
+    total_chunks = 0
+    for f in files:
+        try:
+            total_chunks += ingest_single_file(str(f))
+        except Exception as e:
+            print(f"[ERROR] Failed to ingest {f.name}: {e}")
+
+    print(f"\n[COMPLETE] Batch ingestion finished. Total chunks indexed: {total_chunks}")
 
 
 if __name__ == "__main__":
-    ingest_documents()
+    run_ingestion()
+
+
