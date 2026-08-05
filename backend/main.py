@@ -33,18 +33,31 @@ def health_check():
     return {"status": "healthy"}
 
 
-@app.post("/query", response_model=QueryResponse)
-def query_rag(request: QueryRequest):
-    """Processes user question through the RAG pipeline."""
-    user_query = request.question.strip()
-    if not user_query:
-        raise HTTPException(status_code=400, detail="Question string cannot be empty.")
+# @app.post("/query", response_model=QueryResponse)
+# def query_rag(request: QueryRequest):
+#     """Processes user question through the RAG pipeline."""
+#     user_query = request.question.strip()
+#     if not user_query:
+#         raise HTTPException(status_code=400, detail="Question string cannot be empty.")
+
+#     try:
+#         answer = answer_question(user_query)
+#         return QueryResponse(answer=answer)
+#     except Exception as e:
+#         raise HTTPException(
+#             status_code=500,
+#             detail=f"An error occurred while generating the response: {str(e)}"
+#         )
+
+
+@app.post("/query")
+def query_documents(request: QueryRequest):
+    if not request.question.strip():
+        raise HTTPException(status_code=400, detail="Question cannot be empty.")
 
     try:
-        answer = answer_question(user_query)
-        return QueryResponse(answer=answer)
+        # Returns {"answer": str, "sources": list}
+        result = answer_question(request.question)
+        return result
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"An error occurred while generating the response: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=str(e))
