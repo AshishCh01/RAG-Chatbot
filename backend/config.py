@@ -21,7 +21,7 @@ LLM_MODEL = "gemini-flash-latest"
 # Document & Ingestion Settings
 DOCUMENTS_DIR = Path(__file__).resolve().parent / "documents"
 CHUNK_SIZE = 1000
-CHUNK_OVERLAP = 150
+CHUNK_OVERLAP = 150 
 TOP_K_RESULTS = 4
 
 # Validate required variables
