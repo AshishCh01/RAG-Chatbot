@@ -1,4 +1,5 @@
 import os
+from typing import Optional, List, Dict, Any
 import requests
 
 BASE_URL = os.getenv("API_URL", "http://localhost:8000")
@@ -6,9 +7,12 @@ QUERY_URL = f"{BASE_URL.rstrip('/')}/query"
 UPLOAD_URL = f"{BASE_URL.rstrip('/')}/upload"
 
 
-def query_backend(question: str) -> dict:
-    """Sends user query to FastAPI and returns dictionary containing 'answer' and 'sources'."""
-    payload = {"question": question}
+def query_backend(question: str, chat_history: Optional[List[Dict[str, Any]]] = None) -> dict:
+    """Sends user query and recent chat history to FastAPI."""
+    payload = {
+        "question": question,
+        "chat_history": chat_history or []
+    }
     headers = {"Content-Type": "application/json"}
 
     try:
