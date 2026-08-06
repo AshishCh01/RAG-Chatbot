@@ -5,6 +5,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from config import LLM_MODEL, GOOGLE_API_KEY
 from retrieval import get_retriever
+from ocr_loader import extract_text_from_image_bytes
 
 SYSTEM_PROMPT = """You are a helpful assistant for document questioning.
 Answer the user's question strictly derived ONLY from the provided context below.
@@ -46,34 +47,28 @@ def contextualize_question(query: str, chat_history: Optional[List[Dict[str, Any
         return query
 
 
-def answer_question(query: str, chat_history: Optional[List[Dict[str, Any]]] = None) -> dict:
-    """Retrieves relevant context, extracts metadata sources, generates answer, and returns structured payload."""
-    retriever = get_retriever()
-    history = chat_history or []
+def _generate_answer(question: str, context: str) -> str:
+    """Formats the prompt and invokes Gemini to produce a final answer from context."""
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", SYSTEM_PROMPT),
+        ("human", "{question}")
+    ])
 
-    # 1. Reformulate follow-up query into a standalone query for Pinecone
-    search_query = contextualize_question(query, history)
+    llm = ChatGoogleGenerativeAI(
+        model=LLM_MODEL,
+        google_api_key=GOOGLE_API_KEY,
+        temperature=0.0,
+        max_retries=5
+    )
 
-    # --------------------------------------------------
-    # DEBUG LOGS (Check your FastAPI terminal)
-    # --------------------------------------------------
-    print("\n" + "=" * 40)
-    print(f"📥 Original User Query : {query}")
-    print(f"🔄 Rewritten Query Used : {search_query}")
-    print("=" * 40 + "\n")
-    # --------------------------------------------------
+    chain = prompt | llm | StrOutputParser()
+    return chain.invoke({"context": context, "question": question})
 
 
-    # 2. Retrieve relevant text chunks using the standalone query
-    docs = retriever.invoke(search_query)
-
-    # 3. Extract and format sources (deduplicated)
+def _extract_sources(docs) -> List[Dict[str, str]]:
+    """Extracts and deduplicates filename/page metadata from retrieved chunks."""
     raw_sources = []
-    context_texts = []
-
     for doc in docs:
-        context_texts.append(doc.page_content)
-
         source_path = doc.metadata.get("source", "Unknown Document")
         filename = os.path.basename(source_path)
 
@@ -95,23 +90,36 @@ def answer_question(query: str, chat_history: Optional[List[Dict[str, Any]]] = N
         if pair not in seen:
             seen.add(pair)
             unique_sources.append(src)
+    return unique_sources
+
+
+def answer_question(query: str, chat_history: Optional[List[Dict[str, Any]]] = None) -> dict:
+    """Retrieves relevant context, extracts metadata sources, generates answer, and returns structured payload."""
+    retriever = get_retriever()
+    history = chat_history or []
+
+    # 1. Reformulate follow-up query into a standalone query for Pinecone
+    search_query = contextualize_question(query, history)
+
+    # --------------------------------------------------
+    # DEBUG LOGS (Check your FastAPI terminal)
+    # --------------------------------------------------
+    print("\n" + "=" * 40)
+    print(f"📥 Original User Query : {query}")
+    print(f"🔄 Rewritten Query Used : {search_query}")
+    print("=" * 40 + "\n")
+    # --------------------------------------------------
+
+    # 2. Retrieve relevant text chunks using the standalone query
+    docs = retriever.invoke(search_query)
+
+    # 3. Extract and format sources (deduplicated)
+    context_texts = [doc.page_content for doc in docs]
+    unique_sources = _extract_sources(docs)
 
     # 4. Format prompt and invoke Gemini model
     context = "\n\n---\n\n".join(context_texts)
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", SYSTEM_PROMPT),
-        ("human", "{question}")
-    ])
-
-    llm = ChatGoogleGenerativeAI(
-        model=LLM_MODEL,
-        google_api_key=GOOGLE_API_KEY,
-        temperature=0.0,
-        max_retries=5
-    )
-
-    chain = prompt | llm | StrOutputParser()
-    answer_text = chain.invoke({"context": context, "question": query})
+    answer_text = _generate_answer(query, context)
 
     if "couldn't find that information" in answer_text.lower():
         sources_to_return = []
@@ -121,6 +129,65 @@ def answer_question(query: str, chat_history: Optional[List[Dict[str, Any]]] = N
     return {
         "answer": answer_text,
         "sources": sources_to_return
+    }
+
+
+def answer_image_question(
+    image_bytes: bytes,
+    filename: str,
+    typed_question: Optional[str] = None,
+    chat_history: Optional[List[Dict[str, Any]]] = None
+) -> dict:
+    """Handles an image attached directly in chat (NOT saved to Pinecone).
+    OCRs the image, then either:
+      - treats the OCR'd text AS the question (if user typed nothing), or
+      - treats the OCR'd text as extra context alongside the user's typed question.
+    Still retrieves supporting context from Pinecone, same as a normal text query.
+    """
+    ocr_text = extract_text_from_image_bytes(image_bytes, filename)
+    if not ocr_text.strip():
+        raise ValueError(f"No readable text found in '{filename}'.")
+
+    history = chat_history or []
+
+    if typed_question and typed_question.strip():
+        question = typed_question.strip()
+        image_context_note = f"[Text extracted from attached image '{filename}']:\n{ocr_text}"
+    else:
+        question = ocr_text
+        image_context_note = None
+
+    # Reformulate using chat history, same as the normal text flow
+    search_query = contextualize_question(question, history)
+
+    print("\n" + "=" * 40)
+    print(f"🖼️ Image Attached : {filename}")
+    print(f"📥 Question Used : {question}")
+    print(f"🔄 Rewritten Query Used : {search_query}")
+    print("=" * 40 + "\n")
+
+    retriever = get_retriever()
+    docs = retriever.invoke(search_query)
+
+    context_texts = [doc.page_content for doc in docs]
+    if image_context_note:
+        context_texts.insert(0, image_context_note)
+
+    unique_sources = _extract_sources(docs)
+
+    context = "\n\n---\n\n".join(context_texts)
+    answer_text = _generate_answer(question, context)
+
+    if "couldn't find that information" in answer_text.lower():
+        sources_to_return = []
+    else:
+        sources_to_return = unique_sources
+
+    return {
+        "answer": answer_text,
+        "sources": sources_to_return,
+        "extracted_text": ocr_text,
+        "question_used": question
     }
 
 

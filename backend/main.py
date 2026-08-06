@@ -2,9 +2,9 @@ import shutil
 from pathlib import Path
 from typing import List, Dict, Optional
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi import FastAPI, File, UploadFile, HTTPException, Form
 from pydantic import BaseModel
-from generation import answer_question
+from generation import answer_question, answer_image_question
 from ingestion import ingest_single_file, DOCUMENTS_DIR
 from ocr_loader import OCR_SUPPORTED_EXTENSIONS
 
@@ -90,3 +90,35 @@ def upload_document(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to process file: {str(e)}")
 
+
+@app.post("/query-image")
+def query_with_image(
+    file: UploadFile = File(...),
+    question: Optional[str] = Form(None),
+):
+    """Receives an image attached in the chat input, OCRs it on the spot, and answers
+    the question WITHOUT saving anything to Pinecone. If `question` is empty, the OCR'd
+    text from the image itself is treated as the question."""
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No image provided.")
+
+    ext = Path(file.filename).suffix.lower()
+    if ext not in OCR_SUPPORTED_EXTENSIONS:
+        allowed_str = ", ".join(sorted(OCR_SUPPORTED_EXTENSIONS))
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported image format '{ext}'. Supported formats: {allowed_str}"
+        )
+
+    try:
+        image_bytes = file.file.read()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to read image: {str(e)}")
+
+    try:
+        result = answer_image_question(image_bytes, file.filename, question)
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

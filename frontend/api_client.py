@@ -1,18 +1,15 @@
 import os
-from typing import Optional, List, Dict, Any
 import requests
 
 BASE_URL = os.getenv("API_URL", "http://localhost:8000")
 QUERY_URL = f"{BASE_URL.rstrip('/')}/query"
 UPLOAD_URL = f"{BASE_URL.rstrip('/')}/upload"
+QUERY_IMAGE_URL = f"{BASE_URL.rstrip('/')}/query-image"
 
 
-def query_backend(question: str, chat_history: Optional[List[Dict[str, Any]]] = None) -> dict:
-    """Sends user query and recent chat history to FastAPI."""
-    payload = {
-        "question": question,
-        "chat_history": chat_history or []
-    }
+def query_backend(question: str) -> dict:
+    """Sends user query to FastAPI and returns dictionary containing 'answer' and 'sources'."""
+    payload = {"question": question}
     headers = {"Content-Type": "application/json"}
 
     try:
@@ -55,3 +52,32 @@ def upload_document(uploaded_file) -> dict:
     except Exception as e:
         return {"error": f"Unexpected Error: {str(e)}"}
 
+
+def query_image_backend(image_bytes: bytes, filename: str, question: str = "") -> dict:
+    """Sends an image attached in the chat input (plus an optional typed question) to
+    FastAPI's /query-image endpoint. Returns 'answer', 'sources', and 'extracted_text'."""
+    try:
+        files = {
+            "file": (filename, image_bytes)
+        }
+        data = {
+            "question": question or ""
+        }
+        response = requests.post(QUERY_IMAGE_URL, files=files, data=data, timeout=90)
+        response.raise_for_status()
+        return response.json()
+
+    except requests.exceptions.ConnectionError:
+        return {
+            "answer": "Error: Unable to connect to backend server. Ensure FastAPI is running on http://localhost:8000.",
+            "sources": [],
+            "extracted_text": ""
+        }
+    except requests.exceptions.HTTPError as e:
+        try:
+            error_detail = response.json().get("detail", str(e))
+        except Exception:
+            error_detail = str(e)
+        return {"answer": f"Error: {error_detail}", "sources": [], "extracted_text": ""}
+    except Exception as e:
+        return {"answer": f"Unexpected Error: {str(e)}", "sources": [], "extracted_text": ""}
