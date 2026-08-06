@@ -9,6 +9,7 @@ from langchain_community.document_loaders import (
 )
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_pinecone import PineconeEmbeddings, PineconeVectorStore
+from ocr_loader import load_image_with_ocr, OCR_SUPPORTED_EXTENSIONS
 from config import (
     PINECONE_API_KEY,
     PINECONE_INDEX_NAME,
@@ -37,6 +38,8 @@ def load_single_document(file_path: str):
         loader = CSVLoader(file_str, encoding="utf-8")
     elif ext in [".txt", ".md"]:
         loader = TextLoader(file_str, encoding="utf-8")
+    elif ext in OCR_SUPPORTED_EXTENSIONS:
+        return load_image_with_ocr(file_str)   # returns Documents directly, no .load() needed
     else:
         raise ValueError(f"Unsupported file format: {ext}")
 
@@ -58,6 +61,12 @@ def ingest_single_file(file_path: str) -> int:
     )
     chunks = text_splitter.split_documents(docs)
     print(f"[INGESTING] Created {len(chunks)} chunk(s) for {file_path}")
+
+    if not chunks:
+        raise ValueError(
+            f"No text could be extracted from '{Path(file_path).name}' "
+            "(OCR may have found no readable text in the image)."
+        )
 
     # Initialize Pinecone embeddings with SecretStr wrapping
     embeddings = PineconeEmbeddings(
@@ -82,7 +91,7 @@ def run_ingestion():
         print(f"[ERROR] Directory '{DOCUMENTS_DIR}' does not exist.")
         return
 
-    supported_extensions = {".pdf", ".docx", ".csv", ".txt", ".md"}
+    supported_extensions = {".pdf", ".docx", ".csv", ".txt", ".md"} | OCR_SUPPORTED_EXTENSIONS
     files = [f for f in dir_path.iterdir() if f.is_file() and f.suffix.lower() in supported_extensions]
 
     if not files:

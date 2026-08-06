@@ -10,6 +10,7 @@ from langchain_community.document_loaders import (
 )
 
 from config import DOCUMENTS_DIR
+from ocr_loader import load_image_with_ocr, OCR_SUPPORTED_EXTENSIONS
 
 
 def load_single_document(file_path: Path) -> List[Document]:
@@ -26,6 +27,10 @@ def load_single_document(file_path: Path) -> List[Document]:
             loader = CSVLoader(str_path, encoding="utf-8")
         elif ext == ".docx":
             loader = Docx2txtLoader(str_path)
+        elif ext in OCR_SUPPORTED_EXTENSIONS:
+            docs = load_image_with_ocr(str_path)
+            print(f"[SUCCESS] OCR-loaded {len(docs)} document record(s) from {file_path.name}")
+            return docs
         else:
             print(f"[SKIP] Unsupported file format: {file_path.name}")
             return []
@@ -64,3 +69,5 @@ def load_all_documents(docs_directory: Path = DOCUMENTS_DIR) -> List[Document]:
 if __name__ == "__main__":
     # Independent execution check
     documents = load_all_documents()
+
+

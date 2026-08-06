@@ -11,3 +11,5 @@ pypdf
 python-docx
 pandas
 python-dotenv
+pytesseract
+Pillow

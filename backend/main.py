@@ -6,6 +6,7 @@ from fastapi import FastAPI, File, UploadFile, HTTPException
 from pydantic import BaseModel
 from generation import answer_question
 from ingestion import ingest_single_file, DOCUMENTS_DIR
+from ocr_loader import OCR_SUPPORTED_EXTENSIONS
 
 app = FastAPI(title="RAG Chatbot API")
 
@@ -17,7 +18,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-ALLOWED_EXTENSIONS = {".pdf", ".docx", ".csv", ".txt", ".md"}
+ALLOWED_EXTENSIONS = {".pdf", ".docx", ".csv", ".txt", ".md"} | OCR_SUPPORTED_EXTENSIONS
 
 
 class MessageItem(BaseModel):
