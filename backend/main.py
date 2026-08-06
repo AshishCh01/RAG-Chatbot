@@ -1,5 +1,6 @@
 import shutil
 from pathlib import Path
+from typing import List, Dict, Optional
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from pydantic import BaseModel
@@ -19,8 +20,14 @@ app.add_middleware(
 ALLOWED_EXTENSIONS = {".pdf", ".docx", ".csv", ".txt", ".md"}
 
 
+class MessageItem(BaseModel):
+    role: str
+    content: str
+
+
 class QueryRequest(BaseModel):
     question: str
+    chat_history: Optional[List[MessageItem]] = []
 
 
 @app.get("/health")
@@ -34,7 +41,8 @@ def query_documents(request: QueryRequest):
         raise HTTPException(status_code=400, detail="Question cannot be empty.")
 
     try:
-        result = answer_question(request.question)
+        history_list = [item.model_dump() for item in request.chat_history] if request.chat_history else []
+        result = answer_question(request.question, history_list)
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -80,5 +88,4 @@ def upload_document(file: UploadFile = File(...)):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to process file: {str(e)}")
-
 
