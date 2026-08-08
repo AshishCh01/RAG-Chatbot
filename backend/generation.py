@@ -1,4 +1,5 @@
 import os
+import json
 from typing import Optional, List, Dict, Any
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
@@ -126,10 +127,21 @@ def answer_question(query: str, chat_history: Optional[List[Dict[str, Any]]] = N
     else:
         sources_to_return = unique_sources
 
-    return {
+    result = {
         "answer": answer_text,
         "sources": sources_to_return
     }
+
+    # --------------------------------------------------
+    # DEBUG LOG: Final answer response in JSON format
+    # --------------------------------------------------
+    print("\n" + "=" * 40)
+    print("✅ FINAL RESPONSE")
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+    print("=" * 40 + "\n")
+    # --------------------------------------------------
+
+    return result
 
 
 def answer_image_question(
@@ -160,11 +172,18 @@ def answer_image_question(
     # Reformulate using chat history, same as the normal text flow
     search_query = contextualize_question(question, history)
 
+    # --------------------------------------------------
+    # DEBUG LOGS (Check your FastAPI terminal) — JSON format
+    # --------------------------------------------------
     print("\n" + "=" * 40)
-    print(f"🖼️ Image Attached : {filename}")
-    print(f"📥 Question Used : {question}")
-    print(f"🔄 Rewritten Query Used : {search_query}")
+    print(json.dumps({
+        "image_attached": filename,
+        "ocr_extracted_text": ocr_text,
+        "question_used": question,
+        "rewritten_query": search_query
+    }, indent=2, ensure_ascii=False))
     print("=" * 40 + "\n")
+    # --------------------------------------------------
 
     retriever = get_retriever()
     docs = retriever.invoke(search_query)
@@ -183,16 +202,26 @@ def answer_image_question(
     else:
         sources_to_return = unique_sources
 
-    return {
+    result = {
         "answer": answer_text,
         "sources": sources_to_return,
         "extracted_text": ocr_text,
         "question_used": question
     }
 
+    # --------------------------------------------------
+    # DEBUG LOG: Final answer response in JSON format
+    # --------------------------------------------------
+    print("\n" + "=" * 40)
+    print("✅ FINAL RESPONSE")
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+    print("=" * 40 + "\n")
+    # --------------------------------------------------
+
+    return result
+
 
 if __name__ == "__main__":
     test_result = answer_question("How many layers are in the encoder stack?")
     print("Answer:", test_result["answer"])
     print("Sources:", test_result["sources"])
-
